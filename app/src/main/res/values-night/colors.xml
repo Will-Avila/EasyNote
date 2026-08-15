@@ -1,0 +1,14 @@
+<resources>
+    <color name="ink_950">#F6F7FA</color>
+    <color name="ink_700">#C0C6D2</color>
+    <color name="paper">#15171D</color>
+    <color name="mist">#262A33</color>
+    <color name="white">#FFFFFF</color>
+    <color name="coral">#F08B83</color>
+    <color name="teal">#8CE0CC</color>
+    <color name="violet">#A69BE8</color>
+    <color name="primary">#CDEFE5</color>
+    <color name="on_primary">#15221F</color>
+    <color name="dialog_surface">#24262E</color>
+    <color name="dialog_on_surface">#F6F7FA</color>
+</resources>

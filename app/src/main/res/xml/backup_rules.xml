@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<full-backup-content>
+    <exclude domain="database" path="notas.db" />
+    <exclude domain="database" path="notas.db-wal" />
+    <exclude domain="database" path="notas.db-shm" />
+    <exclude domain="database" path="notas.db-journal" />
+    <exclude domain="sharedpref" path="noteharbor.preferences.xml" />
+    <exclude domain="sharedpref" path="noteharbor.cloud-backup.xml" />
+    <exclude domain="sharedpref" path="noteharbor.secure-secrets.xml" />
+</full-backup-content>

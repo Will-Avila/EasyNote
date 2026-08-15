@@ -1,0 +1,5 @@
+# Mantém o script Gradle executável (LF) e os .bat do Windows (CRLF).
+gradlew        text eol=lf
+gradlew.bat    text eol=crlf
+*.bat          text eol=crlf
+*.sh           text eol=lf

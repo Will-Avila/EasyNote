@@ -1,0 +1,42 @@
+# Android / Gradle
+.gradle/
+build/
+downloads/
+local.properties
+.idea/
+*.iml
+.kotlin/
+captures/
+.externalNativeBuild/
+.cxx/
+app/release/
+
+# Keystore / signing (nunca versionar)
+*.jks
+*.keystore
+*.p12
+*.key
+keystore.properties
+*.pem
+*.crt
+*.cer
+
+# Build artifacts
+*.apk
+*.aab
+*.ap_
+*.hprof
+*.log
+
+# Ferramentas locais / anotações
+.claude/
+.hermes/
+
+# Configuração local do Google Cloud (contém SHA-1 do keystore)
+GOOGLE_CLOUD_SETUP.md
+
+# Script local de build/publicação
+scripts/build-and-share.sh
+
+# OS
+.DS_Store
