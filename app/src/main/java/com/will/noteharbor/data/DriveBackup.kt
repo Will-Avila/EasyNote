@@ -31,7 +31,8 @@ object DriveServiceFactory {
 
 object DriveBackupStorage {
     private const val BACKUP_FILE_NAME = "notas-backup.db"
-    private const val MAX_DATABASE_BYTES = 64 * 1024 * 1024
+    // 512 MiB: os bytes dos anexos entram no backup, não só os metadados.
+    private const val MAX_DATABASE_BYTES = 512 * 1024 * 1024
 
     fun readExisting(drive: Drive): ByteArray? {
         val fileId = drive.files().list()

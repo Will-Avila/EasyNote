@@ -28,7 +28,10 @@ class SecureSecretStore(context: Context) {
         val encrypted = cipher.doFinal(value)
         val encodedIv = Base64.encodeToString(iv, Base64.NO_WRAP)
         val encodedValue = Base64.encodeToString(encrypted, Base64.NO_WRAP)
-        preferences.edit().putString(name, "$encodedIv.$encodedValue").apply()
+        // commit() (não apply()): aqui é gravada a passphrase do SQLCipher e o segredo TOTP.
+        // Se o processo morrer antes do flush em disco, a chave se perde e o banco fica
+        // indecifrável na próxima abertura — durabilidade importa mais que async.
+        preferences.edit().putString(name, "$encodedIv.$encodedValue").commit()
     }
 
     fun getBytes(name: String): ByteArray? {
@@ -44,11 +47,37 @@ class SecureSecretStore(context: Context) {
         }.getOrNull()
     }
 
+    /**
+     * Cifra [plain] com a chave do aparelho (Keystore `secret-store.v1`), retornando `iv + ct`.
+     * Usada pelo envelope de segurança LOCAL no backup do Drive: a chave do Keystore sobrevive a
+     * "limpar dados" no mesmo aparelho, então a segurança é restaurada sem pedir senha.
+     */
+    fun encryptWithDeviceKey(plain: ByteArray): ByteArray? = runCatching {
+        val cipher = Cipher.getInstance(TRANSFORMATION)
+        cipher.init(Cipher.ENCRYPT_MODE, key())
+        val iv = cipher.iv
+        val ct = cipher.doFinal(plain)
+        iv + ct
+    }.getOrNull()
+
+    /** Decifra o resultado de [encryptWithDeviceKey]. Null quando a chave do aparelho não está
+     *  disponível (outro aparelho, ou chave do Keystore perdida). */
+    fun decryptWithDeviceKey(data: ByteArray): ByteArray? = runCatching {
+        val iv = data.copyOfRange(0, GCM_IV_BYTES)
+        val ct = data.copyOfRange(GCM_IV_BYTES, data.size)
+        val cipher = Cipher.getInstance(TRANSFORMATION)
+        cipher.init(Cipher.DECRYPT_MODE, key(), GCMParameterSpec(GCM_TAG_BITS, iv))
+        cipher.doFinal(ct)
+    }.getOrNull()
+
     fun remove(name: String) {
         preferences.edit().remove(name).apply()
     }
 
     fun contains(name: String): Boolean = preferences.contains(name)
+
+    /** Todas as chaves guardadas (os valores não são lidos — só os nomes). */
+    fun keys(): Set<String> = preferences.all.keys
 
     private fun key(): SecretKey {
         val keyStore = KeyStore.getInstance(ANDROID_KEYSTORE).apply { load(null) }
@@ -73,6 +102,7 @@ class SecureSecretStore(context: Context) {
         const val KEY_ALIAS = "noteharbor.secret-store.v1"
         const val TRANSFORMATION = "AES/GCM/NoPadding"
         const val GCM_TAG_BITS = 128
+        const val GCM_IV_BYTES = 12
         const val PREFERENCES_NAME = "noteharbor.secure-secrets"
     }
 }

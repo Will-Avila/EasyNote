@@ -11,6 +11,14 @@ data class ChecklistItem(
     val completed: Boolean = false,
 )
 
+/** Metadados de um anexo (arquivo) de uma nota. Os bytes ficam no `AttachmentStore`. */
+data class AttachmentMetadata(
+    val id: String,
+    val name: String,
+    val mimeType: String,
+    val sizeBytes: Long,
+)
+
 enum class NoteType {
     TEXT,
     CHECKLIST,
@@ -46,24 +54,72 @@ data class Note(
     val pinned: Boolean = false,
     val archived: Boolean = false,
     val trashed: Boolean = false,
+    val trashedAt: Long? = null,
     val locked: Boolean = false,
     val passwordHash: String = "",
+    val encryptedContent: String = "",
     val updatedAt: Long = System.currentTimeMillis(),
     val updatedBy: String = "local",
     val items: List<ChecklistItem> = emptyList(),
     val reminder: ReminderSchedule? = null,
+    val attachments: List<AttachmentMetadata> = emptyList(),
 ) {
     val isCompleted: Boolean
         get() = type == NoteType.CHECKLIST && items.isNotEmpty() && items.all { it.completed }
 
-    fun searchableText(): String = buildString {
-        append(title)
-        append(' ')
-        append(body)
-        items.forEach {
+    fun searchableText(): String = if (locked) {
+        title
+    } else {
+        buildString {
+            append(title)
             append(' ')
-            append(it.text)
+            append(body)
+            items.forEach {
+                append(' ')
+                append(it.text)
+            }
+            attachments.forEach {
+                append(' ')
+                append(it.name)
+            }
         }
+    }
+}
+
+/** Serialização JSON da lista de metadados de anexos (usada pelo [NoteJsonCodec] e pelo Room). */
+object AttachmentListCodec {
+    private const val ID = "id"
+    private const val NAME = "name"
+    private const val MIME_TYPE = "mimeType"
+    private const val SIZE_BYTES = "sizeBytes"
+
+    fun encode(attachments: List<AttachmentMetadata>): String {
+        val array = JSONArray()
+        attachments.forEach { attachment ->
+            array.put(
+                JSONObject().apply {
+                    put(ID, attachment.id)
+                    put(NAME, attachment.name)
+                    put(MIME_TYPE, attachment.mimeType)
+                    put(SIZE_BYTES, attachment.sizeBytes)
+                },
+            )
+        }
+        return array.toString()
+    }
+
+    fun decode(raw: String): List<AttachmentMetadata> {
+        if (raw.isBlank()) return emptyList()
+        val array = runCatching { JSONArray(raw) }.getOrElse { return emptyList() }
+        return List(array.length()) { index ->
+            val json = array.optJSONObject(index) ?: return@List AttachmentMetadata("", "", "", 0L)
+            AttachmentMetadata(
+                id = json.optString(ID, ""),
+                name = json.optString(NAME, ""),
+                mimeType = json.optString(MIME_TYPE, ""),
+                sizeBytes = json.optLong(SIZE_BYTES, 0L),
+            )
+        }.filter { it.id.isNotBlank() }
     }
 }
 
@@ -134,8 +190,10 @@ object NoteJsonCodec {
     private const val PINNED = "pinned"
     private const val ARCHIVED = "archived"
     private const val TRASHED = "trashed"
+    private const val TRASHED_AT = "trashedAt"
     private const val LOCKED = "locked"
     private const val PASSWORD_HASH = "passwordHash"
+    private const val ENCRYPTED_CONTENT = "encryptedContent"
     private const val UPDATED_AT = "updatedAt"
     private const val UPDATED_BY = "updatedBy"
     private const val ITEMS = "items"
@@ -148,6 +206,7 @@ object NoteJsonCodec {
     private const val REMINDER_DAYS_OF_WEEK = "daysOfWeek"
     private const val REMINDER_DAY_OF_MONTH = "dayOfMonth"
     private const val REMINDER_DATE = "date"
+    private const val ATTACHMENTS = "attachments"
 
     fun encode(notes: List<Note>): String {
         val array = JSONArray()
@@ -161,10 +220,13 @@ object NoteJsonCodec {
             json.put(PINNED, note.pinned)
             json.put(ARCHIVED, note.archived)
             json.put(TRASHED, note.trashed)
+            note.trashedAt?.let { json.put(TRASHED_AT, it) }
             json.put(LOCKED, note.locked)
             json.put(PASSWORD_HASH, note.passwordHash)
+            json.put(ENCRYPTED_CONTENT, note.encryptedContent)
             json.put(UPDATED_AT, note.updatedAt)
             json.put(UPDATED_BY, note.updatedBy)
+            json.put(ATTACHMENTS, AttachmentListCodec.encode(note.attachments))
 
             val items = JSONArray()
             note.items.forEach { item ->
@@ -236,12 +298,15 @@ object NoteJsonCodec {
                 pinned = json.optBoolean(PINNED),
                 archived = json.optBoolean(ARCHIVED),
                 trashed = json.optBoolean(TRASHED),
+                trashedAt = json.optLong(TRASHED_AT, 0).takeIf { json.has(TRASHED_AT) },
                 locked = json.optBoolean(LOCKED),
                 passwordHash = json.optString(PASSWORD_HASH),
+                encryptedContent = json.optString(ENCRYPTED_CONTENT),
                 updatedAt = json.optLong(UPDATED_AT, System.currentTimeMillis()),
                 updatedBy = json.optString(UPDATED_BY, "local"),
                 items = items,
                 reminder = reminder,
+                attachments = AttachmentListCodec.decode(json.optString(ATTACHMENTS, "")),
             )
         }
     }

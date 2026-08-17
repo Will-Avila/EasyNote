@@ -64,6 +64,9 @@ dependencies {
     implementation("com.google.android.material:material:1.12.0")
     implementation("androidx.room:room-runtime:2.8.4")
     implementation("net.zetetic:sqlcipher-android:4.17.0")
+    implementation("com.lambdapioneer.argon2kt:argon2kt:1.6.0")
+    implementation("androidx.biometric:biometric:1.1.0")
+    implementation("com.google.zxing:core:3.5.3")
     kapt("androidx.room:room-compiler:2.8.4")
 
     implementation("com.google.android.gms:play-services-auth:20.7.0")

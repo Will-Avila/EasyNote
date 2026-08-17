@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths>
+    <!-- Anexos: arquivo original (cifrado ou puro) e cópia decifrada usada para abrir. -->
+    <files-path name="attachments" path="attachments/" />
+    <cache-path name="attachment_cache" path="attachment_cache/" />
+</paths>

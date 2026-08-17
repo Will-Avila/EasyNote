@@ -61,4 +61,49 @@ class NoteJsonCodecTest {
         assertEquals("broken", restored.id)
         assertEquals(null, restored.reminder)
     }
+
+    @Test
+    fun encryptedContentRoundTripsAndLegacyPayloadDecodesToEmpty() {
+        val original = Note(
+            id = "enc-1",
+            title = "Protegida",
+            locked = true,
+            encryptedContent = "dmVyc2lvbmFkbw==",
+        )
+
+        val restored = NoteJsonCodec.decode(NoteJsonCodec.encode(listOf(original))).single()
+
+        assertEquals("dmVyc2lvbmFkbw==", restored.encryptedContent)
+        assertEquals("", NoteJsonCodec.decode("[{\"id\":\"legacy\",\"title\":\"Antiga\"}]").single().encryptedContent)
+    }
+
+    @Test
+    fun trashedAtRoundTripsAndLegacyPayloadDecodesToNull() {
+        val original = Note(id = "t-1", title = "Lixeira", trashed = true, trashedAt = 1700000000000L)
+
+        val restored = NoteJsonCodec.decode(NoteJsonCodec.encode(listOf(original))).single()
+
+        assertEquals(1700000000000L, restored.trashedAt)
+        assertEquals(null, NoteJsonCodec.decode("[{\"id\":\"legacy\",\"title\":\"Antiga\"}]").single().trashedAt)
+    }
+
+    @Test
+    fun attachmentsRoundTripAndLegacyPayloadDecodesToEmptyList() {
+        val original = Note(
+            id = "att-1",
+            title = "Com anexos",
+            attachments = listOf(
+                AttachmentMetadata("uuid-1", "foto.jpg", "image/jpeg", 2048L),
+                AttachmentMetadata("uuid-2", "contrato.pdf", "application/pdf", 10485760L),
+            ),
+        )
+
+        val restored = NoteJsonCodec.decode(NoteJsonCodec.encode(listOf(original))).single()
+
+        assertEquals(original, restored)
+        assertEquals(
+            emptyList<AttachmentMetadata>(),
+            NoteJsonCodec.decode("[{\"id\":\"legacy\",\"title\":\"Antiga\"}]").single().attachments,
+        )
+    }
 }

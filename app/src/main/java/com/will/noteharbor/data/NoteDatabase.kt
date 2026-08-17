@@ -24,8 +24,11 @@ data class NoteEntity(
     val pinned: Boolean,
     val archived: Boolean,
     val trashed: Boolean,
+    val trashedAt: Long?,
     val locked: Boolean,
     val passwordHash: String,
+    val encryptedContent: String,
+    val attachments: String,
     val updatedAt: Long,
     val updatedBy: String,
     val reminderRecurrence: String?,
@@ -110,7 +113,7 @@ interface NoteDao {
 
 @Database(
     entities = [NoteEntity::class, ChecklistItemEntity::class, TombstoneEntity::class, DatabaseMetadataEntity::class],
-    version = 4,
+    version = 7,
     exportSchema = false,
 )
 abstract class NoteDatabase : RoomDatabase() {
@@ -139,6 +142,27 @@ val MIGRATION_3_4 = object : androidx.room.migration.Migration(3, 4) {
         database.execSQL("ALTER TABLE notes ADD COLUMN trashed INTEGER NOT NULL DEFAULT 0")
     }
 }
+
+val MIGRATION_4_5 = object : androidx.room.migration.Migration(4, 5) {
+    override fun migrate(database: androidx.sqlite.db.SupportSQLiteDatabase) {
+        database.execSQL("ALTER TABLE notes ADD COLUMN encryptedContent TEXT NOT NULL DEFAULT ''")
+    }
+}
+
+val MIGRATION_5_6 = object : androidx.room.migration.Migration(5, 6) {
+    override fun migrate(database: androidx.sqlite.db.SupportSQLiteDatabase) {
+        database.execSQL("ALTER TABLE notes ADD COLUMN trashedAt INTEGER")
+        // Notas já na lixeira antes do upgrade: usa a última modificação como marco, para que
+        // também expirem normalmente após o período de retenção.
+        database.execSQL("UPDATE notes SET trashedAt = updatedAt WHERE trashed = 1 AND trashedAt IS NULL")
+    }
+}
+
+val MIGRATION_6_7 = object : androidx.room.migration.Migration(6, 7) {
+    override fun migrate(database: androidx.sqlite.db.SupportSQLiteDatabase) {
+        database.execSQL("ALTER TABLE notes ADD COLUMN attachments TEXT NOT NULL DEFAULT ''")
+    }
+}
 object EncryptedDatabaseFactory {
     private const val SQLCIPHER_LIBRARY = "sqlcipher"
 
@@ -148,7 +172,7 @@ object EncryptedDatabaseFactory {
         val factory = SupportOpenHelperFactory(passphrase)
         return Room.databaseBuilder(context.applicationContext, NoteDatabase::class.java, databasePath)
             .openHelperFactory(factory)
-            .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
+            .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7)
             .setJournalMode(RoomDatabase.JournalMode.TRUNCATE)
             .allowMainThreadQueries()
             .build()
@@ -158,7 +182,7 @@ object EncryptedDatabaseFactory {
 object PlainDatabaseFactory {
     fun open(context: Context, databasePath: String): NoteDatabase =
         Room.databaseBuilder(context.applicationContext, NoteDatabase::class.java, databasePath)
-            .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
+            .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7)
             .setJournalMode(RoomDatabase.JournalMode.TRUNCATE)
             .allowMainThreadQueries()
             .build()
@@ -175,8 +199,11 @@ internal fun NoteStoreSnapshot.toEntities(): Triple<List<NoteEntity>, List<Check
             pinned = note.pinned,
             archived = note.archived,
             trashed = note.trashed,
+            trashedAt = note.trashedAt,
             locked = note.locked,
             passwordHash = note.passwordHash,
+            encryptedContent = note.encryptedContent,
+            attachments = AttachmentListCodec.encode(note.attachments),
             updatedAt = note.updatedAt,
             updatedBy = note.updatedBy,
             reminderRecurrence = note.reminder?.recurrence?.name,
@@ -228,8 +255,11 @@ internal fun List<NoteEntity>.toNotes(items: List<ChecklistItemEntity>): List<No
             pinned = entity.pinned,
             archived = entity.archived,
             trashed = entity.trashed,
+            trashedAt = entity.trashedAt,
             locked = entity.locked,
             passwordHash = entity.passwordHash,
+            encryptedContent = entity.encryptedContent,
+            attachments = AttachmentListCodec.decode(entity.attachments),
             updatedAt = entity.updatedAt,
             updatedBy = entity.updatedBy,
             items = itemsByNote[entity.id].orEmpty()

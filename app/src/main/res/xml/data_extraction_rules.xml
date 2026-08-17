@@ -8,6 +8,11 @@
         <exclude domain="sharedpref" path="noteharbor.preferences.xml" />
         <exclude domain="sharedpref" path="noteharbor.cloud-backup.xml" />
         <exclude domain="sharedpref" path="noteharbor.secure-secrets.xml" />
+        <!-- Método de desbloqueio + embrulhos das notas protegidas. O caminho de restauração é o
+             backup do Drive (envelope cifrado por senha de recuperação); não viajar no Auto Backup. -->
+        <exclude domain="sharedpref" path="noteharbor.security.preferences.xml" />
+        <exclude domain="file" path="attachments/" />
+        <exclude domain="file" path="attachment_cache/" />
     </cloud-backup>
     <device-transfer>
         <exclude domain="database" path="notas.db" />
@@ -17,5 +22,10 @@
         <exclude domain="sharedpref" path="noteharbor.preferences.xml" />
         <exclude domain="sharedpref" path="noteharbor.cloud-backup.xml" />
         <exclude domain="sharedpref" path="noteharbor.secure-secrets.xml" />
+        <!-- Método de desbloqueio + embrulhos das notas protegidas. O caminho de restauração é o
+             backup do Drive (envelope cifrado por senha de recuperação); não viajar no Auto Backup. -->
+        <exclude domain="sharedpref" path="noteharbor.security.preferences.xml" />
+        <exclude domain="file" path="attachments/" />
+        <exclude domain="file" path="attachment_cache/" />
     </device-transfer>
 </data-extraction-rules>

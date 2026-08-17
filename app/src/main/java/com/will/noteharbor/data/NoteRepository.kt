@@ -33,6 +33,14 @@ class NoteRepository(context: Context) {
         databasePassphrase.fill(0)
     }
 
+    /**
+     * Zera todas as tabelas (reset de fábrica) mantendo o arquivo do banco e a passphrase SQLCipher
+     * intactos — o banco continua aberto e decifrável; apenas os dados são apagados.
+     */
+    fun clearAllData() = synchronized(this) {
+        database.clearAllTables()
+    }
+
     fun load(): List<Note> = synchronized(this) {
         database.noteDao().loadSnapshot().notes
     }

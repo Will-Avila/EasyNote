@@ -13,7 +13,11 @@ EasyNote is an original Android notes MVP inspired by the public feature set of 
 - Custom themed delete-confirmation modal instead of the default Android confirmation dialog.
 - High-contrast menu containing the persistent theme switch and **Backup na nuvem**.
 - Edge-to-edge system-bar and keyboard inset handling.
-- Password-protected notes with hidden content and eye visibility toggle.
+- Protected notes with hidden content and an eye visibility toggle. Content is encrypted with a per-note random secret; unlocking uses one of four methods configured in the Security screen: biometrics, a 3×3 pattern, a numeric PIN, or a time-based one-time code (TOTP). Legacy per-note passwords migrate to this model transparently.
+- TOTP setup shows single-use recovery codes (stored only as SHA-256 hashes) so a lost authenticator does not lock the notes out.
+- A recovery passphrase (minimum 8 characters) encrypts a security envelope embedded in the cloud backup — carrying the unlock method, per-note secrets, and the TOTP secret — so protected notes survive clearing app data or moving to a new device.
+- Note attachments (up to 20 MB each) stored app-private and, for protected notes, encrypted with the note secret.
+- Screenshots are blocked and copied note content is marked sensitive; decrypted attachment caches are cleared on lock.
 - Encrypted local persistence with Room + SQLCipher.
 - One-time migration from the former JSON/SharedPreferences store to the encrypted database.
 - Encrypted cloud backup as a closed SQLCipher database file selected through Android Storage Access Framework.
@@ -46,6 +50,8 @@ EasyNote is an original Android notes MVP inspired by the public feature set of 
 5. On another device, select the same file and enter the same password.
 
 The remote file is not JSON and is not a live copy of the local Room database. The app creates a consistent snapshot before writing it, avoiding SQLite WAL/SHM corruption. Losing the backup password makes the remote file unrecoverable.
+
+Protected-note access is restored separately by a recovery passphrase defined in the Security screen. It encrypts a security envelope stored inside the snapshot; after clearing app data or on a new device, entering it restores the unlock method and the per-note secrets so protected notes open again. On the same device after clearing data, the app restores this envelope automatically without the passphrase.
 
 Android backup and device-transfer rules exclude the local database and secret preferences so the protected material is not copied as an unencrypted legacy backup. The provider's own availability and file permissions still apply.
 
