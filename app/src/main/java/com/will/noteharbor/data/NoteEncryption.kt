@@ -70,13 +70,19 @@ object NoteEncryption {
         val contentBytes = encodeContent(body, items).toByteArray(Charsets.UTF_8)
         val salt = ByteArray(SALT_BYTES).also(random::nextBytes)
         val iv = ByteArray(IV_BYTES).also(random::nextBytes)
-        val key = keyDeriver(password.toByteArray(Charsets.UTF_8), salt, ARGON2_T, ARGON2_M_KIB, ARGON2_P)
+        val passBytes = password.toByteArray(Charsets.UTF_8)
+        val key = try {
+            keyDeriver(passBytes, salt, ARGON2_T, ARGON2_M_KIB, ARGON2_P)
+        } finally {
+            passBytes.fill(0)
+        }
         val ciphertext = try {
             val cipher = Cipher.getInstance("AES/GCM/NoPadding")
             cipher.init(Cipher.ENCRYPT_MODE, SecretKeySpec(key, "AES"), GCMParameterSpec(GCM_TAG_BITS, iv))
             cipher.doFinal(contentBytes)
         } finally {
             key.fill(0)
+            contentBytes.fill(0)
         }
         val envelope = JSONObject().apply {
             put("v", ENVELOPE_VERSION)
@@ -111,7 +117,12 @@ object NoteEncryption {
         val iv = unb64(json.optString("iv"))
         val ciphertext = unb64(json.optString("ct"))
 
-        val key = keyDeriver(password.toByteArray(Charsets.UTF_8), salt, t, m, p)
+        val passBytes = password.toByteArray(Charsets.UTF_8)
+        val key = try {
+            keyDeriver(passBytes, salt, t, m, p)
+        } finally {
+            passBytes.fill(0)
+        }
         val plaintext = try {
             val cipher = Cipher.getInstance("AES/GCM/NoPadding")
             cipher.init(Cipher.DECRYPT_MODE, SecretKeySpec(key, "AES"), GCMParameterSpec(GCM_TAG_BITS, iv))
@@ -125,9 +136,10 @@ object NoteEncryption {
             decodeContent(String(plaintext, Charsets.UTF_8))
         } catch (e: Exception) {
             throw NoteDecryptionException("Conteúdo descriptografado inválido", e)
+        } finally {
+            plaintext.fill(0)
         }
     }
-
     /**
      * Chave AES de 32 bytes para cifrar arquivos anexados a uma nota protegida. Deriva do segredo
      * aleatório da nota (que já é uma chave forte) com um DOMAIN separador — rápido, sem Argon2,

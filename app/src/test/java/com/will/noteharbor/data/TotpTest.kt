@@ -55,10 +55,12 @@ class TotpTest {
     @Test
     fun verifyAcceptsCodesWithinUnlockWindow() {
         val now = 1_234_567_890_000L
-        val ahead = Totp.generate(rfcSecret, now + 4 * 30_000) // 2 min à frente
-        val behind = Totp.generate(rfcSecret, now - 4 * 30_000) // 2 min atrás
+        val ahead = Totp.generate(rfcSecret, now + 1 * 30_000) // 30s à frente
+        val behind = Totp.generate(rfcSecret, now - 1 * 30_000) // 30s atrás
+        val tooFar = Totp.generate(rfcSecret, now + 4 * 30_000) // 2 min à frente
         assertTrue(Totp.verify(rfcSecret, ahead, now, window = Totp.UNLOCK_WINDOW))
         assertTrue(Totp.verify(rfcSecret, behind, now, window = Totp.UNLOCK_WINDOW))
+        assertFalse(Totp.verify(rfcSecret, tooFar, now, window = Totp.UNLOCK_WINDOW))
         assertFalse(Totp.verify(rfcSecret, "000000", now, window = Totp.UNLOCK_WINDOW))
     }
 

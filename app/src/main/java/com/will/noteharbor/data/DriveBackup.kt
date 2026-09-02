@@ -58,12 +58,22 @@ object DriveBackupStorage {
             .execute()
             .files
             .orEmpty()
-        existing.forEach { drive.files().delete(it.id).execute() }
-        val metadata = File().apply {
-            name = BACKUP_FILE_NAME
-            parents = listOf("appDataFolder")
-        }
         val media = ByteArrayContent("application/octet-stream", bytes)
-        drive.files().create(metadata, media).execute()
+        val primaryFile = existing.firstOrNull()
+        if (primaryFile != null) {
+            drive.files().update(primaryFile.id, File(), media).execute()
+            existing.drop(1).forEach { duplicate ->
+                runCatching { drive.files().delete(duplicate.id).execute() }
+            }
+        } else {
+            val metadata = File().apply {
+                name = BACKUP_FILE_NAME
+                parents = listOf("appDataFolder")
+            }
+            val created = drive.files().create(metadata, media).execute()
+            existing.filter { it.id != created.id }.forEach { stale ->
+                runCatching { drive.files().delete(stale.id).execute() }
+            }
+        }
     }
 }

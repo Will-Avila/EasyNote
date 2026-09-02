@@ -23,7 +23,7 @@ class ReminderAlarmReceiver : BroadcastReceiver() {
             }
             try {
                 val note = repository.load().firstOrNull { it.id == noteId }
-                if (note?.reminder == null) {
+                if (note?.reminder == null || note.trashed) {
                     ReminderScheduler.cancel(appContext, noteId)
                 } else {
                     val posted = ReminderNotification.show(appContext, note)

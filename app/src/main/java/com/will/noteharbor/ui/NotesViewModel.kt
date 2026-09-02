@@ -250,6 +250,8 @@ class NotesViewModel(application: Application) : AndroidViewModel(application) {
     fun delete(noteId: String) {
         deleteAttachmentFiles(_notes.value.orEmpty().firstOrNull { it.id == noteId })
         UnlockVault.removeWrapped(getApplication(), noteId)
+        SecurityRecovery.removeNoteSecret(getApplication(), noteId)
+        unlocked.remove(noteId)
         persist(_notes.value.orEmpty().filterNot { it.id == noteId })
     }
 
@@ -280,6 +282,8 @@ class NotesViewModel(application: Application) : AndroidViewModel(application) {
         current.filter { it.trashed }.forEach { note ->
             deleteAttachmentFiles(note)
             UnlockVault.removeWrapped(getApplication(), note.id)
+            SecurityRecovery.removeNoteSecret(getApplication(), note.id)
+            unlocked.remove(note.id)
         }
         persist(current.filterNot { it.trashed })
     }
@@ -325,14 +329,15 @@ class NotesViewModel(application: Application) : AndroidViewModel(application) {
     private fun purgeExpiredTrash(notes: List<Note>): List<Note> {
         val cutoff = System.currentTimeMillis() - TRASH_RETENTION_MS
         val expired = notes.filter { note ->
-            val trashedAt = note.trashedAt
-            note.trashed && trashedAt != null && trashedAt <= cutoff
+            val trashedTime = note.trashedAt ?: note.updatedAt
+            note.trashed && trashedTime <= cutoff
         }
         if (expired.isEmpty()) return notes
         expired.forEach { note ->
             deleteAttachmentFiles(note)
             UnlockVault.removeWrapped(getApplication(), note.id)
             SecurityRecovery.removeNoteSecret(getApplication(), note.id)
+            unlocked.remove(note.id)
         }
         return notes.filterNot { expired.contains(it) }
     }

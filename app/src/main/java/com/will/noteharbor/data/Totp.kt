@@ -19,8 +19,8 @@ object Totp {
     const val WINDOW = 1
     const val SECRET_BYTES = 20
 
-    /** Janela ampla de verificação de desbloqueio (±5 min): tolera relógio divergente. */
-    const val UNLOCK_WINDOW = 10
+    /** Janela de verificação de desbloqueio (±30s): padrão RFC 6238. */
+    const val UNLOCK_WINDOW = 1
 
     /** Busca de descompasso de relógio no setup (±10 min): cobre aparelhos com relógio bem divergente. */
     const val MAX_SKEW_STEPS = 20

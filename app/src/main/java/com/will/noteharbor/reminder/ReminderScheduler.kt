@@ -8,6 +8,7 @@ import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
+import android.net.Uri
 import android.content.pm.PackageManager
 import android.util.Log
 import android.os.Build
@@ -125,11 +126,12 @@ object ReminderScheduler {
         val alarmManager = appContext.getSystemService(AlarmManager::class.java)
         val preferences = appContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
         val previousIds = preferences.getStringSet(SCHEDULED_IDS, emptySet()).orEmpty()
-        val currentById = notes.associateBy { it.id }
-        previousIds.filterNot { currentById.containsKey(it) || notes.any { note -> note.id == it && note.reminder != null } }
+        val activeNotes = notes.filter { !it.trashed }
+        val currentById = activeNotes.associateBy { it.id }
+        previousIds.filterNot { currentById.containsKey(it) || activeNotes.any { note -> note.id == it && note.reminder != null } }
             .forEach { cancel(appContext, it) }
 
-        val scheduledIds = notes.mapNotNull { note ->
+        val scheduledIds = activeNotes.mapNotNull { note ->
             note.reminder?.let {
                 if (schedule(appContext, alarmManager, note, it)) note.id else null
             }
@@ -139,11 +141,14 @@ object ReminderScheduler {
     }
 
     fun schedule(context: Context, note: Note) {
+        if (note.trashed) {
+            cancel(context, note.id)
+            return
+        }
         val reminder = note.reminder ?: return
         val alarmManager = context.getSystemService(AlarmManager::class.java)
         schedule(context, alarmManager, note, reminder)
     }
-
     fun cancel(context: Context, noteId: String) {
         cancelAlarmAndForget(context, noteId)
         ReminderNotification.cancel(context, noteId)
@@ -163,6 +168,7 @@ object ReminderScheduler {
         val alarmManager = context.getSystemService(AlarmManager::class.java)
         val intent = Intent(context, ReminderAlarmReceiver::class.java).apply {
             action = ACTION_REMINDER
+            data = Uri.parse("noteharbor://reminder-retry/$noteId")
         }
         val pendingIntent = PendingIntent.getBroadcast(
             context,
@@ -184,6 +190,7 @@ object ReminderScheduler {
         val alarmManager = context.getSystemService(AlarmManager::class.java)
         val intent = Intent(context, ReminderAlarmReceiver::class.java).apply {
             action = ACTION_REMINDER
+            data = Uri.parse("noteharbor://reminder-retry/$noteId")
             putExtra(EXTRA_NOTE_ID, noteId)
             putExtra(EXTRA_RETRY_COUNT, attempt)
         }
@@ -260,6 +267,7 @@ object ReminderScheduler {
             }
         val intent = Intent(context, ReminderAlarmReceiver::class.java).apply {
             action = ACTION_REMINDER
+            data = Uri.parse("noteharbor://reminder/${note.id}")
             putExtra(EXTRA_NOTE_ID, note.id)
             putExtra(EXTRA_RETRY_COUNT, 0)
         }
@@ -284,6 +292,7 @@ object ReminderScheduler {
     private fun cancel(context: Context, alarmManager: AlarmManager, noteId: String) {
         val intent = Intent(context, ReminderAlarmReceiver::class.java).apply {
             action = ACTION_REMINDER
+            data = Uri.parse("noteharbor://reminder/$noteId")
             putExtra(EXTRA_NOTE_ID, noteId)
         }
         val pendingIntent = PendingIntent.getBroadcast(

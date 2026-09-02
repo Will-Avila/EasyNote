@@ -23,6 +23,10 @@ import android.graphics.drawable.Drawable
 import android.graphics.drawable.GradientDrawable
 import android.graphics.drawable.StateListDrawable
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
+import android.view.HapticFeedbackConstants
+import com.will.noteharbor.data.NoteRepository
 import android.os.Bundle
 import android.os.PersistableBundle
 import android.text.Editable
@@ -75,6 +79,7 @@ import androidx.core.view.updateLayoutParams
 import com.google.android.material.button.MaterialButton
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.google.android.material.floatingactionbutton.FloatingActionButton
+import com.google.android.material.snackbar.Snackbar
 import com.google.android.material.timepicker.MaterialTimePicker
 import com.google.android.material.timepicker.TimeFormat
 import com.google.zxing.BarcodeFormat
@@ -121,6 +126,7 @@ import com.will.noteharbor.ui.NotesViewModel
 import com.will.noteharbor.ui.PatternLockView
 import com.will.noteharbor.ui.SafeAreaPolicy
 import com.will.noteharbor.ui.UiPalette
+import com.will.noteharbor.ui.UiType
 import java.io.File
 import java.text.SimpleDateFormat
 import java.time.LocalDate
@@ -147,6 +153,21 @@ class MainActivity : AppCompatActivity() {
         LOCKED,
     }
 
+    private class ViewerState(
+        val noteId: String,
+        val noteColor: NoteColor,
+        val noteType: NoteType,
+        val root: View,
+        val scroll: ScrollView,
+        val titleView: TextView,
+        val bodyView: TextView?,
+        val progressLabel: TextView?,
+        val progressBar: ProgressBar?,
+        val checkBoxes: List<CheckBox>,
+        val dateView: TextView,
+        val attachmentsCount: Int,
+    )
+
     private val viewModel: NotesViewModel by viewModels()
     private lateinit var palette: UiPalette
     private lateinit var notesContainer: LinearLayout
@@ -159,8 +180,13 @@ class MainActivity : AppCompatActivity() {
     private var currentScreen = Screen.HOME
     private var currentViewerNoteId: String? = null
     private var currentScreenRoot: View? = null
+    private var homeFab: FloatingActionButton? = null
     private var editorReturnScreen = Screen.HOME
     private var editorReturnNoteId: String? = null
+    private var currentViewerState: ViewerState? = null
+    private var editorHasChanges: (() -> Boolean)? = null
+    private val searchDebounceHandler = Handler(Looper.getMainLooper())
+    private var searchDebounceRunnable: Runnable? = null
     private var secureFlagActive = false
     private var appWentToBackground = false
     // Senhas das notas recuperadas na DESATIVAÇÃO do método (a desativação já resolveu o método).
@@ -241,9 +267,34 @@ class MainActivity : AppCompatActivity() {
             screenCaptureCallback?.let { registerScreenCaptureCallback(ContextCompat.getMainExecutor(this), it) }
         }
         window.setSoftInputMode(android.view.WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE)
+        var restoredScreen: Screen? = null
+        if (savedInstanceState != null) {
+            searchQuery = savedInstanceState.getString(KEY_STATE_SEARCH_QUERY).orEmpty()
+            activeFilter = runCatching { NoteFilter.valueOf(savedInstanceState.getString(KEY_STATE_ACTIVE_FILTER).orEmpty()) }.getOrDefault(NoteFilter.ALL)
+            restoredScreen = runCatching { Screen.valueOf(savedInstanceState.getString(KEY_STATE_SCREEN).orEmpty()) }.getOrNull()
+            currentViewerNoteId = savedInstanceState.getString(KEY_STATE_VIEWER_NOTE_ID)
+            editorReturnScreen = runCatching { Screen.valueOf(savedInstanceState.getString(KEY_STATE_EDITOR_RETURN_SCREEN).orEmpty()) }.getOrDefault(Screen.HOME)
+            editorReturnNoteId = savedInstanceState.getString(KEY_STATE_EDITOR_RETURN_NOTE_ID)
+        }
         if (isOnboardingComplete()) {
-            currentScreen = Screen.HOME
-            setScreenContent(buildContent())
+            when (restoredScreen) {
+                Screen.ARCHIVED -> showArchived()
+                Screen.TRASH -> showTrash()
+                Screen.SECURITY -> showSecuritySettings()
+                Screen.VIEWER -> {
+                    val note = currentViewerNoteId?.let { id -> viewModel.notes.value.orEmpty().firstOrNull { it.id == id } }
+                        ?: runCatching { NoteRepository(applicationContext).load().firstOrNull { it.id == currentViewerNoteId } }.getOrNull()
+                    if (note != null) {
+                        openViewer(note)
+                    } else {
+                        showHome()
+                    }
+                }
+                Screen.EDITOR, Screen.HOME, Screen.WELCOME, Screen.LOCKED, null -> {
+                    currentScreen = Screen.HOME
+                    setScreenContent(buildContent())
+                }
+            }
         } else {
             currentScreen = Screen.WELCOME
             setScreenContent(buildWelcomeScreen())
@@ -269,7 +320,13 @@ class MainActivity : AppCompatActivity() {
                 Screen.HOME -> renderNotes(notes)
                 Screen.VIEWER -> {
                     val note = currentViewerNoteId?.let { id -> notes.firstOrNull { it.id == id } }
-                    if (note == null) showHome() else renderViewer(note)
+                    if (note == null) {
+                        showHome()
+                    } else if (currentViewerState?.noteId == note.id) {
+                        updateViewerNote(note)
+                    } else {
+                        renderViewer(note)
+                    }
                 }
                 Screen.EDITOR -> Unit
                 Screen.ARCHIVED -> renderArchivedNotes(notes)
@@ -287,6 +344,16 @@ class MainActivity : AppCompatActivity() {
             handleReminderIntent(intent)
         }
         maybeLockAppIfNeeded()
+    }
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        super.onSaveInstanceState(outState)
+        outState.putString(KEY_STATE_SCREEN, currentScreen.name)
+        outState.putString(KEY_STATE_VIEWER_NOTE_ID, currentViewerNoteId)
+        outState.putString(KEY_STATE_SEARCH_QUERY, searchQuery)
+        outState.putString(KEY_STATE_ACTIVE_FILTER, activeFilter.name)
+        outState.putString(KEY_STATE_EDITOR_RETURN_SCREEN, editorReturnScreen.name)
+        outState.putString(KEY_STATE_EDITOR_RETURN_NOTE_ID, editorReturnNoteId)
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -400,6 +467,16 @@ class MainActivity : AppCompatActivity() {
             })
         }
         root.post { requestInsets() }
+        if (!reduceMotion()) {
+            root.alpha = 0f
+            root.animate().alpha(1f).setDuration(140).start()
+        }
+    }
+
+    private fun reduceMotion(): Boolean {
+        val animator = Settings.Global.getFloat(contentResolver, Settings.Global.ANIMATOR_DURATION_SCALE, 1f)
+        val transition = Settings.Global.getFloat(contentResolver, Settings.Global.TRANSITION_ANIMATION_SCALE, 1f)
+        return animator == 0f || transition == 0f
     }
 
     private fun applySavedNightMode() {
@@ -452,27 +529,17 @@ class MainActivity : AppCompatActivity() {
                 addView(label(text, 15, palette.text, false), LinearLayout.LayoutParams(0, WRAP, 1f))
             }
         }
-        fun divider(): View = View(this).apply { setBackgroundColor(palette.inputBorder) }
         val rowParams = LinearLayout.LayoutParams(MATCH, dp(52))
-        val dividerParams = LinearLayout.LayoutParams(MATCH, dp(1)).apply {
-            marginStart = dp(14)
-            marginEnd = dp(14)
-            topMargin = dp(4)
-            bottomMargin = dp(4)
-        }
 
         menu.addView(item(
             if (palette.isDark) "Tema claro" else "Tema escuro",
             if (palette.isDark) R.drawable.ic_mode_light else R.drawable.ic_mode_night,
             palette.text,
         ) { toggleNightMode() }, rowParams)
-        menu.addView(divider(), dividerParams)
         menu.addView(item("Arquivadas", R.drawable.ic_archive, palette.text) { showArchived() }, rowParams)
         menu.addView(item("Lixeira", R.drawable.ic_delete, palette.text) { showTrash() }, rowParams)
-        menu.addView(divider(), dividerParams)
-        menu.addView(item("Backup na nuvem", R.drawable.ic_cloud_backup, palette.accent) { showCloudBackupDialog() }, rowParams)
-        menu.addView(divider(), dividerParams)
         menu.addView(item("Segurança", R.drawable.ic_lock, palette.text) { showSecuritySettings() }, rowParams)
+        menu.addView(item("Backup na nuvem", R.drawable.ic_cloud_backup, palette.accent) { showCloudBackupDialog() }, rowParams)
 
         popup = PopupWindow(menu, dp(256), WRAP, true).apply {
             setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
@@ -519,7 +586,7 @@ class MainActivity : AppCompatActivity() {
             topMargin = dp(4)
             bottomMargin = dp(4)
         }
-        val destructiveTint = if (palette.isDark) Color.parseColor("#D96B68") else Color.parseColor("#C44845")
+        val destructiveTint = palette.danger
 
         if (note.trashed) {
             menu.addView(item("Restaurar", R.drawable.ic_archive, palette.text) {
@@ -538,8 +605,14 @@ class MainActivity : AppCompatActivity() {
                 R.drawable.ic_archive,
                 palette.text,
             ) {
-                if (note.archived) viewModel.unarchive(note.id) else viewModel.archive(note.id)
-                onNoteRemoved?.invoke()
+                if (note.archived) {
+                    viewModel.unarchive(note.id)
+                    onNoteRemoved?.invoke()
+                } else {
+                    viewModel.archive(note.id)
+                    onNoteRemoved?.invoke()
+                    showUndoSnackbar("Nota arquivada", "Desfazer") { viewModel.unarchive(note.id) }
+                }
             }, rowParams)
             menu.addView(divider(), dividerParams)
             menu.addView(item("Excluir", R.drawable.ic_delete, destructiveTint) {
@@ -660,7 +733,7 @@ class MainActivity : AppCompatActivity() {
             setTextColor(if (destructive) Color.WHITE else palette.dialogButton)
             backgroundTintList = ColorStateList.valueOf(
                 if (destructive) {
-                    if (palette.isDark) Color.parseColor("#D96B68") else Color.parseColor("#C44845")
+                    palette.danger
                 } else {
                     palette.inputSurface
                 },
@@ -854,7 +927,7 @@ class MainActivity : AppCompatActivity() {
             text = "Desconectar"
             isAllCaps = false
             setTextColor(Color.WHITE)
-            backgroundTintList = ColorStateList.valueOf(if (palette.isDark) Color.parseColor("#D96B68") else Color.parseColor("#C44845"))
+            backgroundTintList = ColorStateList.valueOf(palette.danger)
             cornerRadius = dp(14)
             insetTop = 0
             insetBottom = 0
@@ -951,12 +1024,23 @@ class MainActivity : AppCompatActivity() {
             background = inputBackground()
             setCompoundDrawablesWithIntrinsicBounds(android.R.drawable.ic_menu_search, 0, 0, 0)
             compoundDrawablePadding = dp(10)
+            if (searchQuery.isNotEmpty()) {
+                setText(searchQuery)
+                setSelection(searchQuery.length)
+            }
             addTextChangedListener(object : TextWatcher {
                 override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
 
                 override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
                     searchQuery = s?.toString().orEmpty()
-                    renderNotes(viewModel.notes.value.orEmpty())
+                    searchDebounceRunnable?.let { searchDebounceHandler.removeCallbacks(it) }
+                    val runnable = Runnable {
+                        if (currentScreen == Screen.HOME) {
+                            renderNotes(viewModel.notes.value.orEmpty())
+                        }
+                    }
+                    searchDebounceRunnable = runnable
+                    searchDebounceHandler.postDelayed(runnable, 200)
                 }
 
                 override fun afterTextChanged(s: Editable?) = Unit
@@ -1006,6 +1090,7 @@ class MainActivity : AppCompatActivity() {
         frame.addView(fab, FrameLayout.LayoutParams(dp(60), dp(60), Gravity.BOTTOM or Gravity.END).apply {
             setMargins(0, 0, dp(20), dp(22))
         })
+        homeFab = fab
 
         ViewCompat.setOnApplyWindowInsetsListener(frame) { _, insets ->
             applyContentInsets(content, insets, 20, 22)
@@ -1030,6 +1115,7 @@ class MainActivity : AppCompatActivity() {
         val chip = label(text, 13, palette.unselectedChipText, true).apply {
             gravity = Gravity.CENTER
             setOnClickListener {
+                searchDebounceRunnable?.let { searchDebounceHandler.removeCallbacks(it) }
                 activeFilter = filter
                 refreshFilterStyles()
                 renderNotes(viewModel.notes.value.orEmpty())
@@ -1065,6 +1151,7 @@ class MainActivity : AppCompatActivity() {
                 gravity = Gravity.CENTER_HORIZONTAL
                 setPadding(dp(28), dp(64), dp(28), dp(64))
             }
+            empty.addView(emptyStateIcon())
             empty.addView(label("Tudo limpo por aqui", 20, palette.text, true))
             empty.addView(label("Crie uma nota para começar a tirar ideias da cabeça.", 14, palette.secondaryText, false).apply {
                 gravity = Gravity.CENTER
@@ -1083,20 +1170,25 @@ class MainActivity : AppCompatActivity() {
             elevation = dp(2).toFloat()
             setOnClickListener { openNote(note) }
         }
+        val spine = View(this).apply {
+            setBackgroundColor(UiPalette.cardAccent(note.color, palette.isDark))
+        }
+        card.addView(spine, FrameLayout.LayoutParams(dp(4), MATCH, Gravity.START))
         val content = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(18), dp(16), dp(18), dp(16))
         }
-        card.addView(content, FrameLayout.LayoutParams(MATCH, WRAP))
+        card.addView(content, FrameLayout.LayoutParams(MATCH, WRAP).apply { marginStart = dp(4) })
         val topRow = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL }
         val titleBlock = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         titleBlock.addView(label(
             if (note.type == NoteType.CHECKLIST) "CHECKLIST" else "NOTA",
-            10,
+            UiType.EYEBROW,
             UiPalette.cardAccent(note.color, palette.isDark),
             true,
+            spacing = UiType.EYEBROW_SPACING,
         ))
-        titleBlock.addView(label(note.title, 19, palette.cardText, true).apply {
+        titleBlock.addView(label(note.title, UiType.HEADLINE, palette.cardText, true).apply {
             maxLines = 1
             ellipsize = TextUtils.TruncateAt.END
             setPadding(0, dp(4), 0, 0)
@@ -1115,7 +1207,7 @@ class MainActivity : AppCompatActivity() {
         content.addView(topRow)
 
         if (note.locked) {
-            content.addView(label("CONTEÚDO PROTEGIDO", 11, UiPalette.cardAccent(note.color, palette.isDark), true).apply {
+            content.addView(label("CONTEÚDO PROTEGIDO", 11, UiPalette.cardAccent(note.color, palette.isDark), true, spacing = UiType.EYEBROW_SPACING).apply {
                 setPadding(0, dp(12), 0, 0)
             })
             content.addView(label("Toque para desbloquear e visualizar.", 14, palette.cardBody, false).apply {
@@ -1145,7 +1237,7 @@ class MainActivity : AppCompatActivity() {
         }
         footerMeta.addView(label(formatDate(note.updatedAt), 11, palette.cardFooter, false), LinearLayout.LayoutParams(0, WRAP, 1f))
         if (note.isCompleted && !note.locked) {
-            footerMeta.addView(label("PRONTO", 10, UiPalette.cardAccent(note.color, palette.isDark), true))
+            footerMeta.addView(label("PRONTO", 10, UiPalette.cardAccent(note.color, palette.isDark), true, spacing = UiType.EYEBROW_SPACING))
         }
         footer.addView(footerMeta, LinearLayout.LayoutParams(MATCH, WRAP))
         note.reminder?.let { reminder ->
@@ -1792,6 +1884,7 @@ class MainActivity : AppCompatActivity() {
                 gravity = Gravity.CENTER_HORIZONTAL
                 setPadding(dp(28), dp(64), dp(28), dp(64))
             }
+            empty.addView(emptyStateIcon())
             empty.addView(label("Nenhuma nota arquivada", 20, palette.text, true))
             empty.addView(label("As notas que você arquivar aparecem aqui.", 14, palette.secondaryText, false).apply {
                 gravity = Gravity.CENTER
@@ -1837,7 +1930,7 @@ class MainActivity : AppCompatActivity() {
         header.addView(MaterialButton(this).apply {
             text = "Esvaziar"
             isAllCaps = false
-            setTextColor(if (palette.isDark) Color.parseColor("#D96B68") else Color.parseColor("#C44845"))
+            setTextColor(palette.danger)
             backgroundTintList = ColorStateList.valueOf(palette.inputSurface)
             strokeColor = ColorStateList.valueOf(palette.inputBorder)
             strokeWidth = dp(1)
@@ -1884,6 +1977,7 @@ class MainActivity : AppCompatActivity() {
                 gravity = Gravity.CENTER_HORIZONTAL
                 setPadding(dp(28), dp(64), dp(28), dp(64))
             }
+            empty.addView(emptyStateIcon())
             empty.addView(label("Lixeira vazia", 20, palette.text, true))
             empty.addView(label("As notas que você excluir aparecem aqui e são apagadas de vez após 30 dias.", 14, palette.secondaryText, false).apply {
                 gravity = Gravity.CENTER
@@ -1898,6 +1992,7 @@ class MainActivity : AppCompatActivity() {
     private fun openViewer(note: Note) {
         currentScreen = Screen.VIEWER
         currentViewerNoteId = note.id
+        currentViewerState = null
         renderViewer(note)
     }
 
@@ -1905,10 +2000,69 @@ class MainActivity : AppCompatActivity() {
         setSecureFlag(note.locked)
         palette = UiPalette.from(this)
         configureSystemBars()
-        setScreenContent(buildViewerScreen(materialized(note)))
+        val (view, state) = buildViewerScreenWithState(materialized(note))
+        currentViewerState = state
+        setScreenContent(view)
     }
 
-    private fun navigateBackFromEditor() {
+    private fun updateViewerNote(note: Note) {
+        val state = currentViewerState
+        val mat = materialized(note)
+        if (state == null ||
+            state.noteId != mat.id ||
+            state.noteColor != mat.color ||
+            state.noteType != mat.type ||
+            state.attachmentsCount != mat.attachments.size ||
+            (mat.type == NoteType.CHECKLIST && state.checkBoxes.size != mat.items.size)
+        ) {
+            val scrollY = state?.scroll?.scrollY ?: 0
+            renderViewer(mat)
+            if (scrollY > 0) {
+                currentViewerState?.scroll?.post {
+                    currentViewerState?.scroll?.scrollTo(0, scrollY)
+                }
+            }
+            return
+        }
+        setSecureFlag(mat.locked)
+        state.titleView.text = mat.title
+        state.dateView.text = formatDate(mat.updatedAt)
+        if (mat.type == NoteType.CHECKLIST) {
+            val checklistProgress = ChecklistProgress.of(mat.items)
+            state.progressLabel?.text = checklistProgress.label
+            state.progressBar?.progress = checklistProgress.percent
+            mat.items.forEachIndexed { index, item ->
+                val cb = state.checkBoxes[index]
+                if (cb.text != item.text) cb.text = item.text
+                if (cb.isChecked != item.completed) {
+                    cb.setOnCheckedChangeListener(null)
+                    cb.isChecked = item.completed
+                    cb.alpha = if (item.completed) 0.64f else 1f
+                    cb.setOnCheckedChangeListener { _, checked ->
+                        cb.alpha = if (checked) 0.64f else 1f
+                        viewModel.toggleItem(mat.id, index, checked)
+                    }
+                }
+            }
+        } else {
+            state.bodyView?.text = mat.body
+        }
+    }
+
+    private fun navigateBackFromEditor(force: Boolean = false) {
+        if (!force && editorHasChanges?.invoke() == true) {
+            showConfirmDialog(
+                title = "Descartar alterações?",
+                message = "As alterações não salvas nesta nota serão perdidas.",
+                confirmLabel = "Descartar",
+                destructive = true,
+                action = {
+                    navigateBackFromEditor(force = true)
+                },
+            )
+            return
+        }
+        editorHasChanges = null
         // Anexos novos desta sessão que não foram salvos: apaga os arquivos para não deixar órfãos.
         editorAttachmentNewIds?.forEach { AttachmentStore.delete(applicationContext, it) }
         clearEditorAttachmentState()
@@ -1921,6 +2075,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun clearEditorAttachmentState() {
+        editorHasChanges = null
         editorAttachments = null
         editorAttachmentNewIds = null
         editorAttachmentsRefresh = null
@@ -2161,7 +2316,7 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun buildViewerScreen(note: Note): View {
+    private fun buildViewerScreenWithState(note: Note): Pair<View, ViewerState> {
         val root = FrameLayout(this).apply { setBackgroundColor(palette.canvas) }
         val scroll = ScrollView(this).apply {
             clipToPadding = false
@@ -2217,27 +2372,41 @@ class MainActivity : AppCompatActivity() {
         }
         noteSurface.addView(label(
             if (note.type == NoteType.CHECKLIST) "CHECKLIST" else "NOTA",
-            10,
+            UiType.EYEBROW,
             UiPalette.cardAccent(note.color, palette.isDark),
             true,
+            spacing = UiType.EYEBROW_SPACING,
         ))
-        noteSurface.addView(label(note.title, 24, palette.cardText, true).apply {
+        val titleView = label(note.title, 24, palette.cardText, true).apply {
             setTextIsSelectable(true)
             setPadding(0, dp(8), 0, dp(18))
-        })
+        }
+        noteSurface.addView(titleView)
+
+        var bodyView: TextView? = null
+        var progressLabel: TextView? = null
+        var progressBar: ProgressBar? = null
+        val checkBoxes = mutableListOf<CheckBox>()
+
         if (note.type == NoteType.CHECKLIST) {
             val checklistProgress = ChecklistProgress.of(note.items)
-            noteSurface.addView(label(checklistProgress.label, 13, UiPalette.cardAccent(note.color, palette.isDark), true).apply {
+            val pLabel = label(checklistProgress.label, 13, UiPalette.cardAccent(note.color, palette.isDark), true).apply {
                 setPadding(0, 0, 0, dp(8))
-            })
-            noteSurface.addView(ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
+            }
+            progressLabel = pLabel
+            noteSurface.addView(pLabel)
+
+            val pBar = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
                 max = 100
                 progress = checklistProgress.percent
                 progressTintList = ColorStateList.valueOf(UiPalette.cardAccent(note.color, palette.isDark))
                 progressBackgroundTintList = ColorStateList.valueOf(Color.argb(64, 0, 0, 0))
-            }, LinearLayout.LayoutParams(MATCH, dp(8)).apply { bottomMargin = dp(12) })
+            }
+            progressBar = pBar
+            noteSurface.addView(pBar, LinearLayout.LayoutParams(MATCH, dp(8)).apply { bottomMargin = dp(12) })
+
             note.items.forEachIndexed { index, item ->
-                noteSurface.addView(CheckBox(this).apply {
+                val cb = CheckBox(this).apply {
                     text = item.text
                     textSize = 16f
                     isChecked = item.completed
@@ -2249,13 +2418,17 @@ class MainActivity : AppCompatActivity() {
                         alpha = if (checked) 0.64f else 1f
                         viewModel.toggleItem(note.id, index, checked)
                     }
-                })
+                }
+                checkBoxes.add(cb)
+                noteSurface.addView(cb)
             }
         } else {
-            noteSurface.addView(label(note.body, 17, palette.cardBody, false).apply {
+            val bView = label(note.body, 17, palette.cardBody, false).apply {
                 setLineSpacing(dp(5).toFloat(), 1f)
                 setTextIsSelectable(true)
-            })
+            }
+            bodyView = bView
+            noteSurface.addView(bView)
         }
         // Anexos só são exibidos quando a nota não está bloqueada (ou está desbloqueada na sessão):
         // nada de um anexo de nota protegida vaza enquanto o conteúdo não é liberado.
@@ -2267,14 +2440,31 @@ class MainActivity : AppCompatActivity() {
                 noteSurface.addView(buildViewerAttachmentRow(attachment, note.id, note.color))
             }
         }
-        noteSurface.addView(label(formatDate(note.updatedAt), 11, palette.cardFooter, false).apply {
+        val dateView = label(formatDate(note.updatedAt), 11, palette.cardFooter, false).apply {
             setPadding(0, dp(20), 0, 0)
-        })
+        }
+        noteSurface.addView(dateView)
         content.addView(noteSurface, LinearLayout.LayoutParams(MATCH, WRAP))
 
         installSafeInsets(root, content, 20, 32)
-        return root
+        val state = ViewerState(
+            noteId = note.id,
+            noteColor = note.color,
+            noteType = note.type,
+            root = root,
+            scroll = scroll,
+            titleView = titleView,
+            bodyView = bodyView,
+            progressLabel = progressLabel,
+            progressBar = progressBar,
+            checkBoxes = checkBoxes,
+            dateView = dateView,
+            attachmentsCount = note.attachments.size,
+        )
+        return Pair(root, state)
     }
+
+    private fun buildViewerScreen(note: Note): View = buildViewerScreenWithState(note).first
 
     private fun buildEditorScreen(existing: Note?): View {
         setSecureFlag(existing?.locked == true)
@@ -2578,8 +2768,38 @@ class MainActivity : AppCompatActivity() {
         editorAttachmentsRefresh = { renderAttachments() }
         renderAttachments()
         content.addView(attachmentsSection, LinearLayout.LayoutParams(MATCH, WRAP))
+        val initialTitle = existing?.title.orEmpty()
+        val initialBody = source?.let {
+            if (it.type == NoteType.CHECKLIST) it.items.joinToString("\n") { item -> item.text } else it.body
+        }.orEmpty()
+        val initialTypeIsChecklist = existing?.type == NoteType.CHECKLIST
+        val initialColor = existing?.color ?: NoteColor.SUN
+        val initialProtected = existing?.locked == true
+        val initialReminder = existing?.reminder
+        val initialAttachmentIds = existing?.attachments?.map { it.id }.orEmpty()
+
+        editorHasChanges = {
+            val currentTitle = titleInput.text?.toString().orEmpty()
+            val currentBody = bodyInput.text?.toString().orEmpty()
+            val currentTypeIsChecklist = checklistType.isChecked
+            val currentColor = selectedColor
+            val currentProtected = protectEnabled
+            val currentReminder = reminderSelection.schedule
+            val currentAttachmentIds = editorAttachments?.map { it.id }.orEmpty()
+
+            currentTitle != initialTitle ||
+                currentBody != initialBody ||
+                currentTypeIsChecklist != initialTypeIsChecklist ||
+                currentColor != initialColor ||
+                currentProtected != initialProtected ||
+                currentReminder != initialReminder ||
+                currentAttachmentIds != initialAttachmentIds ||
+                !editorAttachmentNewIds.isNullOrEmpty()
+        }
+
 
         fun commit(title: String, text: String, secret: String, idOverride: String?) {
+            editorHasChanges = null
             val type = if (checklistType.isChecked) NoteType.CHECKLIST else NoteType.TEXT
             val reminder = reminderSelection.schedule
             val attachments = editorAttachments.orEmpty()
@@ -2628,7 +2848,7 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        installSafeInsets(root, content, 20, 32)
+        installSafeInsets(root, content, 20, 32, includeIme = false)
         return root
     }
 
@@ -3049,7 +3269,7 @@ class MainActivity : AppCompatActivity() {
             setTextColor(if (destructive) Color.WHITE else palette.fabIcon)
             backgroundTintList = ColorStateList.valueOf(
                 if (destructive) {
-                    if (palette.isDark) Color.parseColor("#D96B68") else Color.parseColor("#C44845")
+                    palette.danger
                 } else {
                     palette.fab
                 },
@@ -3084,7 +3304,17 @@ class MainActivity : AppCompatActivity() {
             // cifrado dentro da lixeira até a exclusão definitiva.
             viewModel.trash(note.id)
             onTrashed?.invoke()
+            showUndoSnackbar("Nota movida para a lixeira", "Desfazer") { viewModel.restore(note.id) }
         }
+    }
+
+    private fun showUndoSnackbar(message: String, actionLabel: String, action: () -> Unit) {
+        val snackbar = Snackbar.make(window.decorView, message, Snackbar.LENGTH_LONG)
+            .setAction(actionLabel) { action() }
+        if (currentScreen == Screen.HOME) {
+            homeFab?.let { snackbar.setAnchorView(it) }
+        }
+        snackbar.show()
     }
 
     private fun confirmPermanentDelete(note: Note, onDeleted: (() -> Unit)? = null) {
@@ -3182,7 +3412,7 @@ class MainActivity : AppCompatActivity() {
             isAllCaps = false
             setTextColor(Color.WHITE)
             backgroundTintList = ColorStateList.valueOf(
-                if (palette.isDark) Color.parseColor("#D96B68") else Color.parseColor("#C44845")
+                palette.danger
             )
             cornerRadius = dp(14)
             insetTop = 0
@@ -3520,7 +3750,7 @@ class MainActivity : AppCompatActivity() {
         scroll.addView(body, ViewGroup.LayoutParams(MATCH, WRAP))
         content.addView(scroll, LinearLayout.LayoutParams(MATCH, 0, 1f))
 
-        body.addView(label("Acesso", 15, palette.secondaryText, true))
+        body.addView(label("ACESSO", UiType.LABEL, palette.secondaryText, true, spacing = UiType.EYEBROW_SPACING).apply { setPadding(0, 0, 0, dp(8)) })
         val appLockRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
@@ -3555,53 +3785,47 @@ class MainActivity : AppCompatActivity() {
         appLockRow.addView(appLockCheck, LinearLayout.LayoutParams(MATCH, dp(48)))
         body.addView(appLockRow, LinearLayout.LayoutParams(MATCH, WRAP).apply { bottomMargin = dp(8) })
         body.addView(label(
-            "Bloqueia o app ao iniciar ou voltar do segundo plano. Use o método escolhido abaixo para desbloquear.",
+            "Bloqueia o app ao abrir ou voltar do segundo plano.",
             13,
             palette.secondaryText,
             false,
         ).apply { setPadding(dp(4), 0, 0, dp(20)) })
 
-        body.addView(label("Método de desbloqueio", 15, palette.secondaryText, true))
+        body.addView(label("MÉTODO DE DESBLOQUEIO", UiType.LABEL, palette.secondaryText, true, spacing = UiType.EYEBROW_SPACING).apply { setPadding(0, dp(12), 0, dp(8)) })
         body.addView(label(
-            "Toda nota protegida é desbloqueada com este método. Escolha entre biometria, desenho, PIN numérico ou código TOTP.",
+            "Toda nota protegida é desbloqueada com o método escolhido.",
             13,
             palette.secondaryText,
             false,
         ).apply { setPadding(0, dp(8), 0, dp(16)) })
 
         val indicators = mutableMapOf<UnlockMethod, TextView>()
-        val cards = mutableMapOf<UnlockMethod, LinearLayout>()
+        val rows = mutableMapOf<UnlockMethod, LinearLayout>()
         // Sem método configurado (instalação nova, reset de fábrica ou método desativado), nenhum
         // indicador fica marcado — o default BIOMETRIC do currentMethod não deve parecer selecionado.
         var selected = UnlockVault.configuredMethod(this)?.takeIf { UnlockVault.isMethodAvailable(this, it) }
 
+        val methodList = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            background = rounded(palette.dialogSurface, 18)
+            clipToOutline = true
+        }
+
         fun refresh() {
             indicators.forEach { (method, indicator) ->
                 val isSelected = method == selected
-                if (isSelected) {
-                    indicator.text = "✓"
-                    indicator.setTextColor(palette.fabIcon)
-                    indicator.setBackgroundDrawable(GradientDrawable().apply {
-                        shape = GradientDrawable.OVAL
+                indicator.background = GradientDrawable().apply {
+                    shape = GradientDrawable.OVAL
+                    if (isSelected) {
                         setColor(palette.accent)
-                    })
-                } else {
-                    indicator.text = ""
-                    indicator.setBackgroundDrawable(GradientDrawable().apply {
-                        shape = GradientDrawable.OVAL
+                    } else {
                         setColor(Color.TRANSPARENT)
                         setStroke(dp(2), palette.mutedText)
-                    })
+                    }
                 }
             }
-            cards.forEach { (method, card) ->
-                if (method == selected) {
-                    card.background = outlined(palette.dialogSurface, palette.accent, 18).apply {
-                        setStroke(dp(2), palette.accent)
-                    }
-                } else {
-                    card.background = rounded(palette.dialogSurface, 18)
-                }
+            rows.forEach { (method, row) ->
+                row.setBackgroundColor(if (method == selected) palette.accentSoft else Color.TRANSPARENT)
             }
         }
 
@@ -3612,10 +3836,9 @@ class MainActivity : AppCompatActivity() {
         }
 
         // Cada método é um botão que abre o modal de ativação/configuração/desativação.
-        fun methodCard(method: UnlockMethod, title: String, subtitle: String): LinearLayout {
+        fun methodRow(method: UnlockMethod, title: String, subtitle: String): LinearLayout {
             val indicator = TextView(this).apply {
                 gravity = Gravity.CENTER
-                textSize = 22f
                 isClickable = false
                 isFocusable = false
             }
@@ -3624,7 +3847,6 @@ class MainActivity : AppCompatActivity() {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER_VERTICAL
                 setPadding(dp(16), dp(14), dp(16), dp(14))
-                background = rounded(palette.dialogSurface, 18)
                 isClickable = true
                 isFocusable = true
                 setOnClickListener {
@@ -3639,7 +3861,7 @@ class MainActivity : AppCompatActivity() {
                     )
                 }
             }
-            cards[method] = row
+            rows[method] = row
             val texts = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
             texts.addView(label(title, 16, palette.text, true))
             texts.addView(label(subtitle, 13, palette.secondaryText, false).apply { setPadding(0, dp(4), 0, 0) })
@@ -3648,34 +3870,29 @@ class MainActivity : AppCompatActivity() {
             return row
         }
 
-        body.addView(
-            methodCard(UnlockMethod.BIOMETRIC, "Biometria", "Digital ou rosto."),
-            LinearLayout.LayoutParams(MATCH, WRAP).apply { bottomMargin = dp(8) },
+        val methods = listOf(
+            Triple(UnlockMethod.BIOMETRIC, "Biometria", "Digital ou rosto."),
+            Triple(UnlockMethod.PATTERN, "Desenho", "Padrão 3x3 desenhado por você, dentro do app."),
+            Triple(UnlockMethod.NUMERIC_PIN, "Senha numérica", "PIN de 4 a 8 dígitos, sem o teclado do sistema."),
+            Triple(UnlockMethod.TOTP, "Código TOTP", "Código de 6 dígitos de um app de autenticação (Google Authenticator, Authy…)."),
         )
-        body.addView(
-            methodCard(UnlockMethod.PATTERN, "Desenho", "Padrão 3x3 desenhado por você, dentro do app."),
-            LinearLayout.LayoutParams(MATCH, WRAP).apply { bottomMargin = dp(8) },
-        )
-        body.addView(
-            methodCard(UnlockMethod.NUMERIC_PIN, "Senha numérica", "PIN de 4 a 8 dígitos, sem o teclado do sistema."),
-            LinearLayout.LayoutParams(MATCH, WRAP).apply { bottomMargin = dp(8) },
-        )
-        body.addView(
-            methodCard(
-                UnlockMethod.TOTP,
-                "Código TOTP",
-                "Código de 6 dígitos de um app de autenticação (Google Authenticator, Authy…).",
-            ),
-            LinearLayout.LayoutParams(MATCH, WRAP).apply { bottomMargin = dp(12) },
-        )
+        methods.forEachIndexed { index, (method, title, subtitle) ->
+            if (index > 0) {
+                methodList.addView(View(this).apply { setBackgroundColor(palette.inputBorder) },
+                    LinearLayout.LayoutParams(MATCH, dp(1)).apply {
+                        marginStart = dp(16)
+                        marginEnd = dp(16)
+                    })
+            }
+            methodList.addView(methodRow(method, title, subtitle), LinearLayout.LayoutParams(MATCH, WRAP))
+        }
+        body.addView(methodList, LinearLayout.LayoutParams(MATCH, WRAP).apply { bottomMargin = dp(12) })
 
-        body.addView(label("Backup da segurança", 15, palette.secondaryText, true).apply {
-            setPadding(0, dp(4), 0, dp(8))
+        body.addView(label("BACKUP DA SEGURANÇA", UiType.LABEL, palette.secondaryText, true, spacing = UiType.EYEBROW_SPACING).apply {
+            setPadding(0, dp(12), 0, dp(8))
         })
         body.addView(label(
-            "Protege a configuração de segurança (método de desbloqueio e acesso às notas protegidas) " +
-                "dentro do backup no Google. Depois de limpar os dados do app ou trocar de celular, " +
-                "digite a senha ao sincronizar.",
+            "Protege sua segurança dentro do backup no Google.",
             13,
             palette.secondaryText,
             false,
@@ -3716,16 +3933,21 @@ class MainActivity : AppCompatActivity() {
             setOnClickListener { showRecoveryPassphraseSetup() }
         }, LinearLayout.LayoutParams(MATCH, dp(48)).apply { bottomMargin = dp(12) })
 
+        body.addView(View(this).apply { setBackgroundColor(palette.inputBorder) },
+            LinearLayout.LayoutParams(MATCH, dp(1)).apply {
+                topMargin = dp(20)
+                bottomMargin = dp(8)
+            })
         body.addView(MaterialButton(this).apply {
             text = "Redefinir aplicativo"
             isAllCaps = false
             textSize = 15f
-            setTextColor(if (palette.isDark) Color.parseColor("#D96B68") else Color.parseColor("#C44845"))
+            setTextColor(palette.danger)
             backgroundTintList = ColorStateList.valueOf(Color.TRANSPARENT)
             insetTop = 0
             insetBottom = 0
             setOnClickListener { startResetAppFlow() }
-        }, LinearLayout.LayoutParams(MATCH, dp(44)).apply { topMargin = dp(4) })
+        }, LinearLayout.LayoutParams(MATCH, dp(44)))
 
         refresh()
 
@@ -3799,7 +4021,7 @@ class MainActivity : AppCompatActivity() {
             text = "Desativar método"
             isAllCaps = false
             textSize = 15f
-            setTextColor(if (palette.isDark) Color.parseColor("#D96B68") else Color.parseColor("#C44845"))
+            setTextColor(palette.danger)
             backgroundTintList = ColorStateList.valueOf(Color.TRANSPARENT)
             insetTop = 0
             insetBottom = 0
@@ -4732,6 +4954,11 @@ class MainActivity : AppCompatActivity() {
                     isAllCaps = false
                     text = if (key == '∅') "" else key.toString()
                     isEnabled = key != '∅'
+                    contentDescription = when (key) {
+                        '⌫' -> "Apagar dígito"
+                        '∅' -> ""
+                        else -> key.toString()
+                    }
                     textSize = 20f
                     gravity = Gravity.CENTER
                     setTextColor(palette.dialogText)
@@ -4742,6 +4969,7 @@ class MainActivity : AppCompatActivity() {
                     setPadding(0, 0, 0, 0)
                     stateListAnimator = null
                     setOnClickListener {
+                        performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
                         when (key) {
                             '⌫' -> backspace()
                             else -> digit(key)
@@ -5302,11 +5530,12 @@ class MainActivity : AppCompatActivity() {
         baseTop: Int,
         baseHorizontal: Int,
         baseBottom: Int = 22,
+        includeIme: Boolean = true,
     ) {
         val systemInsets = insets.getInsets(
             WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout(),
         )
-        val imeInsets = insets.getInsets(WindowInsetsCompat.Type.ime())
+        val imeInsets = if (includeIme) insets.getInsets(WindowInsetsCompat.Type.ime()) else androidx.core.graphics.Insets.NONE
         val padding = SafeAreaPolicy.contentPadding(
             baseHorizontal = dp(baseHorizontal),
             baseTop = dp(baseTop),
@@ -5325,9 +5554,10 @@ class MainActivity : AppCompatActivity() {
         content: View,
         baseTop: Int,
         baseBottom: Int,
+        includeIme: Boolean = true,
     ) {
         ViewCompat.setOnApplyWindowInsetsListener(root) { _, insets ->
-            applyContentInsets(content, insets, baseTop, 22, baseBottom)
+            applyContentInsets(content, insets, baseTop, 22, baseBottom, includeIme)
             insets
         }
     }
@@ -5371,11 +5601,24 @@ class MainActivity : AppCompatActivity() {
             rounded(Color.WHITE, 14),
         )
 
-    private fun label(text: String, size: Int, color: Int, bold: Boolean): TextView = TextView(this).apply {
+    private fun emptyStateIcon(): View = FrameLayout(this).apply {
+        background = rounded(palette.accentSoft, 48)
+        addView(ImageView(this@MainActivity).apply {
+            contentDescription = null
+            setImageResource(R.drawable.ic_file)
+            setColorFilter(palette.accent)
+            scaleType = ImageView.ScaleType.CENTER_INSIDE
+            setPadding(dp(26), dp(26), dp(26), dp(26))
+        }, FrameLayout.LayoutParams(MATCH, MATCH))
+        layoutParams = LinearLayout.LayoutParams(dp(96), dp(96)).apply { bottomMargin = dp(20) }
+    }
+
+    private fun label(text: String, size: Int, color: Int, bold: Boolean, spacing: Float = 0f): TextView = TextView(this).apply {
         this.text = text
         textSize = size.toFloat()
         setTextColor(color)
         typeface = if (bold) Typeface.create("sans", Typeface.BOLD) else Typeface.create("sans", Typeface.NORMAL)
+        if (spacing != 0f) letterSpacing = spacing
     }
 
     /**
@@ -5489,6 +5732,12 @@ class MainActivity : AppCompatActivity() {
         const val WRAP = ViewGroup.LayoutParams.WRAP_CONTENT
         const val UI_PREFERENCES = "noteharbor.ui.preferences"
         const val NIGHT_MODE_KEY = "night_mode"
+        const val KEY_STATE_SCREEN = "key_state_screen"
+        const val KEY_STATE_VIEWER_NOTE_ID = "key_state_viewer_note_id"
+        const val KEY_STATE_SEARCH_QUERY = "key_state_search_query"
+        const val KEY_STATE_ACTIVE_FILTER = "key_state_active_filter"
+        const val KEY_STATE_EDITOR_RETURN_SCREEN = "key_state_editor_return_screen"
+        const val KEY_STATE_EDITOR_RETURN_NOTE_ID = "key_state_editor_return_note_id"
         const val ONBOARDING_COMPLETE_KEY = "onboarding_complete"
     }
 }

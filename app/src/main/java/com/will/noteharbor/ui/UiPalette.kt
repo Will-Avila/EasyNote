@@ -23,6 +23,7 @@ data class UiPalette(
     val accentSoft: Int,
     val fab: Int,
     val fabIcon: Int,
+    val danger: Int,
     val cardText: Int,
     val cardBody: Int,
     val cardFooter: Int,
@@ -57,17 +58,18 @@ data class UiPalette(
             faintText = Color.parseColor("#748092"),
             inputSurface = Color.parseColor("#E4E8EE"),
             inputBorder = Color.parseColor("#B7C0CC"),
-            selectedChip = Color.parseColor("#1F2430"),
+            selectedChip = Color.parseColor("#1F7A66"),
             selectedChipText = Color.WHITE,
             unselectedChip = Color.parseColor("#EEF0F4"),
             unselectedChipText = Color.parseColor("#697386"),
             accent = Color.parseColor("#2B8A78"),
             accentSoft = Color.parseColor("#CDEFE5"),
-            fab = Color.parseColor("#3949AB"),
+            fab = Color.parseColor("#1F7A66"),
             fabIcon = Color.WHITE,
+            danger = Color.parseColor("#C44845"),
             cardText = Color.parseColor("#1F2430"),
             cardBody = Color.parseColor("#424B5B"),
-            cardFooter = Color.parseColor("#7A8391"),
+            cardFooter = Color.parseColor("#505A68"),
 
             dialogSurface = Color.WHITE,
             dialogText = Color.parseColor("#1F2430"),
@@ -91,8 +93,9 @@ data class UiPalette(
             unselectedChipText = Color.parseColor("#C0C6D2"),
             accent = Color.parseColor("#8CE0CC"),
             accentSoft = Color.parseColor("#244E47"),
-            fab = Color.parseColor("#5C6BC0"),
+            fab = Color.parseColor("#3A9C83"),
             fabIcon = Color.WHITE,
+            danger = Color.parseColor("#D96B68"),
             cardText = Color.parseColor("#F6F7FA"),
             cardBody = Color.parseColor("#D5DAE2"),
             cardFooter = Color.parseColor("#AAB3C0"),
@@ -104,4 +107,19 @@ data class UiPalette(
             dialogControlBorder = Color.parseColor("#4B5565"),
         )
     }
+}
+
+/** Typographic scale (sp) and letter-spacing shared by programmatic views. */
+object UiType {
+    const val DISPLAY = 24
+    const val TITLE = 20
+    const val HEADLINE = 18
+    const val BODY = 16
+    const val BODY_SMALL = 14
+    const val LABEL = 12
+    const val CAPTION = 11
+    const val EYEBROW = 10
+
+    /** Letter-spacing (em) for small uppercase category labels. */
+    const val EYEBROW_SPACING = 0.08f
 }

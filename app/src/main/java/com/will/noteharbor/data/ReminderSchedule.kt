@@ -62,7 +62,7 @@ data class ReminderSchedule(
                 if (today.isAfter(after)) today else at(after.toLocalDate().plusDays(1))
             }
             ReminderRecurrence.WEEKLY -> {
-                (0L..6L)
+                (0L..7L)
                     .map { offset -> after.toLocalDate().plusDays(offset) }
                     .map { candidateDate ->
                         candidateDate to at(candidateDate)

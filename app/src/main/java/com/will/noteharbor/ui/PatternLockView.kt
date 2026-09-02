@@ -6,6 +6,7 @@ import android.graphics.Paint
 import android.util.AttributeSet
 import android.view.MotionEvent
 import android.view.View
+import android.view.HapticFeedbackConstants
 import kotlin.math.abs
 import kotlin.math.min
 
@@ -144,6 +145,7 @@ class PatternLockView @JvmOverloads constructor(
             intermediate(last, target).forEach { if (!selected.contains(it)) selected.add(it) }
         }
         selected.add(target)
+        performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
         invalidate()
     }
 

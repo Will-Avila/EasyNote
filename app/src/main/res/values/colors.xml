@@ -4,10 +4,8 @@
     <color name="paper">#FAF8F4</color>
     <color name="mist">#EEF0F4</color>
     <color name="white">#FFFFFF</color>
-    <color name="coral">#F27972</color>
-    <color name="teal">#59B9A8</color>
-    <color name="violet">#8574D5</color>
-    <color name="primary">#1F2430</color>
+    <color name="teal">#2B8A78</color>
+    <color name="primary">#1F7A66</color>
     <color name="on_primary">#FFFFFF</color>
     <color name="dialog_surface">#FFFFFF</color>
     <color name="dialog_on_surface">#1F2430</color>

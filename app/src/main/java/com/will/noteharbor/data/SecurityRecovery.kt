@@ -192,10 +192,15 @@ object SecurityRecovery {
                     b64(MAGIC.toByteArray(Charsets.US_ASCII) + byteArrayOf(VERSION) + ciphertext)
                 } finally {
                     recoveryKey.fill(0)
+                    plain.fill(0)
                 }
             } else {
-                val ct = store.encryptWithDeviceKey(plain) ?: return null
-                b64(MAGIC_LOCAL.toByteArray(Charsets.US_ASCII) + byteArrayOf(VERSION) + ct)
+                try {
+                    val ct = store.encryptWithDeviceKey(plain) ?: return null
+                    b64(MAGIC_LOCAL.toByteArray(Charsets.US_ASCII) + byteArrayOf(VERSION) + ct)
+                } finally {
+                    plain.fill(0)
+                }
             }
         } finally {
             secret?.fill(0)
@@ -232,9 +237,12 @@ object SecurityRecovery {
         if (decoded[magic.size] != VERSION) return false
         val ciphertext = decoded.copyOfRange(magic.size + 1, decoded.size)
         val plain = SecureSecretStore(context).decryptWithDeviceKey(ciphertext) ?: return false
-        return applyPlain(context, plain)
+        return try {
+            applyPlain(context, plain)
+        } finally {
+            plain.fill(0)
+        }
     }
-
     /**
      * Verdadeiro quando [envelope] é o portável (senha de recuperação) — o único que o diálogo de
      * restauração consegue decifrar. Envelopes locais de OUTRO aparelho não têm senha que os libere.
@@ -262,8 +270,12 @@ object SecurityRecovery {
         } catch (_: Exception) {
             return false
         }
-        if (!applyPlain(context, plain)) return false
-        // Re-guarda a chave derivada: a partir daqui a sync volta a cifrar automaticamente.
+        val applied = try {
+            applyPlain(context, plain)
+        } finally {
+            plain.fill(0)
+        }
+        if (!applied) return false
         SecureSecretStore(context).putBytes(SECURE_STORE_KEY, key)
         return true
     }

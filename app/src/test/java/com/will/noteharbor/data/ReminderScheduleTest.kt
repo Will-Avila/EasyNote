@@ -37,6 +37,15 @@ class ReminderScheduleTest {
     }
 
     @Test
+    fun weeklyReminderCalculatesSameDayNextWeekWhenTimeHasPassed() {
+        val after = at(2026, 8, 12, 10, 0) // Wednesday
+
+        val next = ReminderSchedule.weekly(9, 0, dayOfWeek = 3).nextOccurrence(after)
+
+        assertEquals(at(2026, 8, 19, 9, 0), next)
+    }
+
+    @Test
     fun weeklyReminderFindsTheSoonestOfSeveralSelectedWeekdays() {
         val after = at(2026, 8, 12, 10, 0) // Wednesday
 
